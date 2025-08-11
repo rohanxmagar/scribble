@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skribbl.io Clone</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css">
+    <Link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            🎨 Skribbl.io Clone
+        </div>
+        
+        <!-- Lobby Screen -->
+        <div id="lobby" class="lobby">
+            <h2>Welcome to Skribbl.io Clone!</h2>
+            <div class="error-message" id="errorMessage"></div>
+            <div>
+                <input type="text" id="usernameInput" placeholder="Enter your username" maxlength="20">
+            </div>
+            <div>
+                <input type="text" id="roomCodeInput" placeholder="Enter room code" maxlength="6">
+                <button id="joinRoomBtn">Join Room</button>
+            </div>
+        </div>
+        
+        <!-- Game Area -->
+        <div id="gameArea" class="game-area">
+            <div class="room-code">
+                Room Code: <span id="currentRoomCode"></span>
+            </div>
+            
+            <div class="game-content">
+                <div class="left-panel">
+                    <div class="canvas-container">
+                        <canvas id="gameCanvas" width="850" height="400"></canvas>
+                    </div>
+                    <div class="tools">
+                        <div class="color-btn active" data-color="#000000" style="background: #000000;"></div>
+                        <div class="color-btn" data-color="#FF0000" style="background: #FF0000;"></div>
+                        <div class="color-btn" data-color="#00FF00" style="background: #00FF00;"></div>
+                        <div class="color-btn" data-color="#0000FF" style="background: #0000FF;"></div>
+                        <div class="color-btn" data-color="#FFFF00" style="background: #FFFF00;"></div>
+                        <div class="color-btn" data-color="#FF00FF" style="background: #FF00FF;"></div>
+                        <div class="color-btn" data-color="#00FFFF" style="background: #00FFFF;"></div>
+                        <div class="color-btn" data-color="#FFA500" style="background: #FFA500;"></div>
+                        
+                        <div class="brush-size">
+                            <label>Brush Size:</label>
+                            <input type="range" id="brushSize" min="1" max="20" value="3">
+                        </div>
+                        
+                        <button class="clear-btn" id="clearCanvas">Clear</button>
+                    </div>
+                </div>
+                
+                <div class="right-panel">
+                    <div class="game-info">
+                        <div class="current-drawer">Waiting for game to start...</div>
+                        <div class="word-display" id="wordDisplay">_ _ _ _ _</div>
+                        <div class="timer">Time: <span id="timeLeft">60</span>s</div>
+                    </div>
+                    
+                    <div class="players-list">
+                        <h3>Players</h3>
+                        <div id="playersList"></div>
+                    </div>
+                    
+                    <div class="chat-container">
+                        <div class="chat-messages" id="chatMessages"></div>
+                        <div class="chat-input">
+                            <input type="text" id="chatInput" placeholder="Type your guess..." maxlength="100">
+                            <button id="sendChatBtn">Send</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Game Over Screen -->
+        <div id="gameOver" class="game-over">
+            <h2>🎉 Game Over!</h2>
+            <div class="final-scores" id="finalScores"></div>
+            <button class="play-again-btn" id="playAgainBtn">Play Again</button>
+        </div>
+    </div>
+
+     <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // Initialize Socket.IO connection
+        const socket = io();
+        
+        // Game variables
+        let gameState = {
+            isHost: false,
+            isDrawing: false,
+            currentWord: '',
+            players: [],
+            currentDrawer: null,
+            timeLeft: 60,
+            gameStarted: false,
+            currentColor: '#000000',
+            brushSize: 3,
+            round: 1,
+            maxRounds: 3,
+            roomId: null,
+            scores: []
+        };
+        
+        // Canvas setup
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        let isDrawing = false;
+        let lastX = 0;
+        let lastY = 0;
+        
+        // DOM elements
+        const lobby = document.getElementById('lobby');
+        const gameArea = document.getElementById('gameArea');
+        const gameOver = document.getElementById('gameOver');
+        const usernameInput = document.getElementById('usernameInput');
+        const roomCodeInput = document.getElementById('roomCodeInput');
+        const joinRoomBtn = document.getElementById('joinRoomBtn');
+        const currentRoomCode = document.getElementById('currentRoomCode');
+        const wordDisplay = document.getElementById('wordDisplay');
+        const timeLeft = document.getElementById('timeLeft');
+        const playersList = document.getElementById('playersList');
+        const chatMessages = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
+        const sendChatBtn = document.getElementById('sendChatBtn');
+        const clearCanvas = document.getElementById('clearCanvas');
+        const brushSize = document.getElementById('brushSize');
+        const finalScores = document.getElementById('finalScores');
+        const playAgainBtn = document.getElementById('playAgainBtn');
+        const errorMessage = document.getElementById('errorMessage');
+        
+        // Initialize game
+        function init() {
+            setupEventListeners();
+            setupCanvas();
+            setupSocket();
+        }
+        
+        function setupEventListeners() {
+            joinRoomBtn.addEventListener('click', joinRoom);
+            sendChatBtn.addEventListener('click', sendChat);
+            chatInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') sendChat();
+            });
+            clearCanvas.addEventListener('click', clearCanvasHandler);
+            brushSize.addEventListener('input', (e) => {
+                gameState.brushSize = e.target.value;
+            });
+            playAgainBtn.addEventListener('click', returnToLobby);
+            
+            // Color picker
+            document.querySelectorAll('.color-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    document.querySelector('.color-btn.active').classList.remove('active');
+                    e.target.classList.add('active');
+                    gameState.currentColor = e.target.dataset.color;
+                });
+            });
+        }
+        
+        function setupCanvas() {
+            // Set black cursor for drawing
+            canvas.style.cursor = 'url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'16\' height=\'16\' viewBox=\'0 0 16 16\'><circle cx=\'8\' cy=\'8\' r=\'6\' fill=\'black\'/></svg>") 8 8, auto';
+            
+            canvas.addEventListener('mousedown', startDrawing);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseup', stopDrawing);
+            canvas.addEventListener('mouseout', stopDrawing);
+            
+            // Touch events for mobile
+            canvas.addEventListener('touchstart', handleTouch, { passive: false });
+            canvas.addEventListener('touchmove', handleTouch, { passive: false });
+            canvas.addEventListener('touchend', stopDrawing);
+        }
+        
+        function setupSocket() {
+            socket.on('connect', () => {
+                console.log('Connected to server');
+            });
+            
+            socket.on('roomJoined', (data) => {
+                gameState.roomId = data.roomId;
+                currentRoomCode.textContent = data.roomId;
+                showGameArea();
+            });
+            
+            socket.on('joinError', (error) => {
+                showError(error);
+            });
+            
+            socket.on('playersUpdate', (players) => {
+                gameState.players = players;
+                updatePlayersList();
+            });
+            
+            socket.on('playerJoined', (data) => {
+                addChatMessage(`${data.player} joined the game`, 'system');
+                gameState.players = data.players;
+                updatePlayersList();
+            });
+            
+            socket.on('playerLeft', (data) => {
+                addChatMessage(`${data.player} left the game`, 'system');
+                gameState.players = data.players;
+                updatePlayersList();
+            });
+            
+            socket.on('roundStart', (data) => {
+                gameState.gameStarted = true;
+                gameState.currentDrawer = data.drawer;
+                gameState.isDrawing = data.drawer.id === socket.id;
+                gameState.round = data.round;
+                gameState.maxRounds = data.maxRounds;
+                gameState.timeLeft = data.timeLeft;
+                
+                startRound(data.hint);
+            });
+            
+            socket.on('wordReveal', (word) => {
+                gameState.currentWord = word;
+                wordDisplay.textContent = word;
+            });
+            
+            socket.on('timeUpdate', (time) => {
+                gameState.timeLeft = time;
+                timeLeft.textContent = time;
+            });
+            
+            socket.on('drawingData', (data) => {
+                if (!gameState.isDrawing) {
+                    drawLine(data.x0, data.y0, data.x1, data.y1, data.color, data.size);
+                }
+            });
+            
+            socket.on('clearCanvas', () => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            });
+            
+            socket.on('correctGuess', (data) => {
+                addChatMessage(`${data.player} guessed correctly! +${data.score} points`, 'correct');
+                gameState.players = data.players;
+                updatePlayersList();
+            });
+            
+            socket.on('chatMessage', (data) => {
+                addChatMessage(`${data.player}: ${data.message}`, 'guess');
+            });
+            
+            socket.on('roundEnd', (data) => {
+                addChatMessage(`Round ${gameState.round} ended! The word was: ${data.word}`, 'system');
+                gameState.players = data.players;
+                updatePlayersList();
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // Store scores after each round
+                gameState.scores = data.players.map(p => ({
+                    username: p.username,
+                    score: p.score
+                }));
+            });
+            
+            socket.on('gameEnd', (data) => {
+                // Show final scores from all rounds
+                showGameOver(gameState.scores);
+            });
+            
+            socket.on('disconnect', () => {
+                console.log('Disconnected from server');
+            });
+        }
+        
+        function joinRoom() {
+            const username = usernameInput.value.trim();
+            const roomCode = roomCodeInput.value.trim().toUpperCase();
+            if (!username || !roomCode) {
+                showError('Please enter both username and room code');
+                return;
+            }
+            hideError();
+            socket.emit('joinRoom', { roomId: roomCode, username });
+        }
+        
+        function startRound(hint) {
+            updateGameInfo();
+            
+            if (gameState.isDrawing) {
+                addChatMessage("It's your turn to draw!", 'system');
+                enableDrawing();
+            } else {
+                wordDisplay.textContent = hint;
+                addChatMessage(`${gameState.currentDrawer.username} is drawing...`, 'system');
+                disableDrawing();
+            }
+        }
+        
+        function sendChat() {
+            const message = chatInput.value.trim();
+            if (!message) return;
+            
+            socket.emit('chatMessage', message);
+            chatInput.value = '';
+        }
+        
+        function addChatMessage(message, type = 'guess') {
+            const messageEl = document.createElement('div');
+            messageEl.className = `chat-message ${type}`;
+            messageEl.textContent = message;
+            chatMessages.appendChild(messageEl);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        function updatePlayersList() {
+            playersList.innerHTML = '';
+            gameState.players.sort((a, b) => b.score - a.score).forEach(player => {
+                const playerEl = document.createElement('div');
+                playerEl.className = 'player-item';
+                playerEl.innerHTML = `
+                    <span>${player.username} ${player.isHost ? '👑' : ''}</span>
+                    <span>${player.score} pts</span>
+                `;
+                playersList.appendChild(playerEl);
+            });
+        }
+        
+        function updateGameInfo() {
+            const currentDrawerEl = document.querySelector('.current-drawer');
+            if (gameState.gameStarted) {
+                currentDrawerEl.textContent = gameState.isDrawing ? 
+                    "It's your turn to draw!" : 
+                    `${gameState.currentDrawer.username} is drawing`;
+            }
+        }
+        
+        function showGameArea() {
+            lobby.style.display = 'none';
+            gameArea.style.display = 'block';
+            gameOver.style.display = 'none';
+        }
+        
+        function showGameOver(scores) {
+            gameArea.style.display = 'none';
+            gameOver.style.display = 'block';
+            
+            finalScores.innerHTML = '';
+            
+            // Sort scores from highest to lowest
+            scores.sort((a, b) => b.score - a.score).forEach((player, index) => {
+                const scoreEl = document.createElement('div');
+                scoreEl.className = 'final-score-item';
+                scoreEl.innerHTML = `
+                    <span>#${index + 1} ${player.username}</span>
+                    <span>${player.score} points</span>
+                `;
+                finalScores.appendChild(scoreEl);
+            });
+        }
+        
+        function returnToLobby() {
+            // Hide game screens
+            gameArea.style.display = 'none';
+            gameOver.style.display = 'none';
+            
+            // Show lobby
+            lobby.style.display = 'block';
+            
+            // Reset game state
+            gameState.gameStarted = false;
+            gameState.round = 1;
+            gameState.scores = [];
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Clear chat and players list
+            chatMessages.innerHTML = '';
+            playersList.innerHTML = '';
+            
+            // Reset inputs
+            usernameInput.value = '';
+            roomCodeInput.value = '';
+            chatInput.value = '';
+            
+            // Focus on username input
+            usernameInput.focus();
+        }
+        
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+        }
+        
+        function hideError() {
+            errorMessage.style.display = 'none';
+        }
+        
+        function enableDrawing() {
+            canvas.style.cursor = 'url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'16\' height=\'16\' viewBox=\'0 0 16 16\'><circle cx=\'8\' cy=\'8\' r=\'6\' fill=\'black\'/></svg>") 8 8, auto';
+        }
+        
+        function disableDrawing() {
+            canvas.style.cursor = 'not-allowed';
+        }
+        
+function getCanvasCoords(e) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+        x: (e.clientX - rect.left) * scaleX,
+        y: (e.clientY - rect.top) * scaleY
+    };
+}
+
+function startDrawing(e) {
+    if (!gameState.isDrawing) return; // only after joining
+    if (e.target !== canvas) return;  // ignore non-canvas clicks
+
+    isDrawing = true;
+    const { x, y } = getCanvasCoords(e);
+    lastX = x;
+    lastY = y;
+
+    // optional: only draw single dot if desired
+    if (e.type === 'mousedown') {
+        drawDot(lastX, lastY, gameState.currentColor, gameState.brushSize);
+    }
+}
+
+function draw(e) {
+    if (!isDrawing || !gameState.isDrawing) return;
+    if (e.target !== canvas) return;
+
+    const { x: currentX, y: currentY } = getCanvasCoords(e);
+    drawLine(lastX, lastY, currentX, currentY, gameState.currentColor, gameState.brushSize);
+
+    socket.emit('drawingData', {
+        x0: lastX,
+        y0: lastY,
+        x1: currentX,
+        y1: currentY,
+        color: gameState.currentColor,
+        size: gameState.brushSize
+    });
+
+    lastX = currentX;
+    lastY = currentY;
+}
+
+function stopDrawing() {
+    isDrawing = false;
+}
+
+function handleTouch(e) {
+    if (e.target !== canvas) return;
+    e.preventDefault();
+
+    const touch = e.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    const x = (touch.clientX - rect.left) * scaleX;
+    const y = (touch.clientY - rect.top) * scaleY;
+
+    if (e.type === 'touchstart') {
+        lastX = x;
+        lastY = y;
+        drawDot(x, y, gameState.currentColor, gameState.brushSize);
+    }
+
+    const mouseEvent = new MouseEvent(
+        e.type === 'touchstart' ? 'mousedown' :
+        e.type === 'touchmove' ? 'mousemove' : 'mouseup',
+        { clientX: touch.clientX, clientY: touch.clientY }
+    );
+    canvas.dispatchEvent(mouseEvent);
+}
+        function drawLine(x0, y0, x1, y1, color, size) {
+            ctx.beginPath();
+            ctx.moveTo(x0, y0);
+            ctx.lineTo(x1, y1);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = size;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+        }
+        
+        function drawDot(x, y, color, size) {
+            ctx.beginPath();
+            ctx.arc(x, y, size/2, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+        }
+        
+        function clearCanvasHandler() {
+            if (gameState.isDrawing) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                socket.emit('clearCanvas');
+            }
+        }
+        
+        // Initialize the game
+        init();
+    </script>
+</body>
+</html>
